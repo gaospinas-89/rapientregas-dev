@@ -18,6 +18,7 @@ type PackageRow = {
   zone_id?: string | null;
   zone_name?: string | null;
   created_at: string;
+  assigned_at?: string | null;
   is_deleted: boolean;
 };
 
@@ -92,6 +93,7 @@ export default function PackagesPage() {
   const [showBulk, setShowBulk] = useState(true);
   const [showDeletedPanel, setShowDeletedPanel] = useState(false);
   const [queryFiltersApplied, setQueryFiltersApplied] = useState(false);
+  const [expandedCourierDays, setExpandedCourierDays] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     (async () => {
@@ -281,7 +283,7 @@ export default function PackagesPage() {
       return;
     }
 
-    const rows: PackageRow[] = (pkgData ?? []).map((p: any) => ({
+    let rows: PackageRow[] = (pkgData ?? []).map((p: any) => ({
       id: p.id,
       company_id: p.company_id,
       public_code: p.public_code,
@@ -294,8 +296,31 @@ export default function PackagesPage() {
       zone_id: p.zone_id ?? null,
       zone_name: p.zone_name ?? null,
       created_at: p.created_at,
+      assigned_at: null,
       is_deleted: p.status_name === "Eliminado",
     }));
+
+    if (rows.length > 0) {
+      const packageIds = rows.map((r) => r.id);
+      const { data: activeAssigns } = await supabase
+        .from("package_assignments")
+        .select("package_id, assigned_at")
+        .in("package_id", packageIds)
+        .is("unassigned_at", null)
+        .order("assigned_at", { ascending: false });
+
+      const assignedAtByPackage = new Map<string, string | null>();
+      (activeAssigns ?? []).forEach((a: any) => {
+        if (!assignedAtByPackage.has(a.package_id)) {
+          assignedAtByPackage.set(a.package_id, a.assigned_at ?? null);
+        }
+      });
+
+      rows = rows.map((r) => ({
+        ...r,
+        assigned_at: assignedAtByPackage.get(r.id) ?? null,
+      }));
+    }
 
     setPackages(rows);
     setSelectedIds([]);
@@ -896,6 +921,43 @@ export default function PackagesPage() {
   const packageCount = useMemo(() => totalCount, [totalCount]);
   const totalPages = Math.max(1, Math.ceil(packageCount / pageSize));
   const pagedPackages = packages;
+  const showCourierSummary = courierId !== "" && courierId !== NO_COURIER_FILTER;
+
+  const toBogotaDateKey = (isoDate: string | null | undefined) => {
+    if (!isoDate) return "sin-fecha";
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(isoDate));
+    const year = parts.find((p) => p.type === "year")?.value ?? "0000";
+    const month = parts.find((p) => p.type === "month")?.value ?? "01";
+    const day = parts.find((p) => p.type === "day")?.value ?? "01";
+    return `${year}-${month}-${day}`;
+  };
+
+  const formatDayLabel = (day: string) => {
+    if (day === "sin-fecha") return "Sin fecha de asignación";
+    return new Date(`${day}T00:00:00`).toLocaleDateString("es-CO", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  };
+
+  const packagesByCourierDay = useMemo(() => {
+    const grouped = new Map<string, PackageRow[]>();
+    for (const pkg of pagedPackages) {
+      const day = toBogotaDateKey(pkg.assigned_at);
+      if (!grouped.has(day)) grouped.set(day, []);
+      grouped.get(day)!.push(pkg);
+    }
+    return Array.from(grouped.entries())
+      .map(([day, rows]) => ({ day, rows }))
+      .sort((a, b) => (a.day < b.day ? 1 : -1));
+  }, [pagedPackages]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -1168,6 +1230,55 @@ export default function PackagesPage() {
           <h3>Lista de paquetes</h3>
           {loading && <span className="muted">Cargando...</span>}
         </div>
+
+        {showCourierSummary && (
+          <div style={{ marginBottom: 12 }}>
+            {packagesByCourierDay.map((group) => {
+              const open = expandedCourierDays[group.day] ?? false;
+              return (
+                <div key={group.day} className="card compact" style={{ marginBottom: 8 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      cursor: "pointer",
+                    }}
+                    onClick={() =>
+                      setExpandedCourierDays((prev) => ({
+                        ...prev,
+                        [group.day]: !open,
+                      }))
+                    }
+                  >
+                    <strong style={{ textTransform: "capitalize" }}>{formatDayLabel(group.day)}</strong>
+                    <span className="muted">{group.rows.length} paquetes · {open ? "Ocultar" : "Ver"}</span>
+                  </div>
+                  {open && (
+                    <table className="table" style={{ marginTop: 8 }}>
+                      <thead>
+                        <tr>
+                          <th>Código</th>
+                          <th>Estado</th>
+                          <th>Asignado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.rows.map((p) => (
+                          <tr key={`${group.day}-${p.id}`}>
+                            <td className="mono">{p.public_code}</td>
+                            <td>{p.status_name ?? "-"}</td>
+                            <td>{p.assigned_at ? new Date(p.assigned_at).toLocaleString("es-CO") : "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <table className="table">
           <thead>

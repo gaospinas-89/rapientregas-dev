@@ -21,6 +21,7 @@ export default function DashboardLayout({
   const [searchInput, setSearchInput] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchDeleting, setSearchDeleting] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<any | null>(null);
   const [searchHistory, setSearchHistory] = useState<{ label: string; at: string }[]>([]);
@@ -206,6 +207,76 @@ export default function DashboardLayout({
     setSearchLoading(false);
   };
 
+  const deleteFromSearch = async () => {
+    if (!searchResult?.public_code || role !== "admin") return;
+    const confirmed = window.confirm(
+      `¿Eliminar paquete ${searchResult.public_code}? Esta acción lo mueve a estado Eliminado.`
+    );
+    if (!confirmed) return;
+
+    setSearchDeleting(true);
+    setSearchError(null);
+    const companyId = await getCompanyId();
+    if (!companyId) {
+      setSearchError("No se pudo identificar la empresa.");
+      setSearchDeleting(false);
+      return;
+    }
+
+    const [pkgRes, statusRes] = await Promise.all([
+      supabase
+        .from("packages")
+        .select("id, current_status_id")
+        .eq("company_id", companyId)
+        .eq("public_code", searchResult.public_code)
+        .limit(1)
+        .single(),
+      supabase
+        .from("package_statuses")
+        .select("id,name")
+        .eq("company_id", companyId),
+    ]);
+
+    const pkg = pkgRes.data as any;
+    const eliminadoId = (statusRes.data ?? []).find((s: any) => s.name === "Eliminado")?.id;
+    if (!pkg?.id || !eliminadoId) {
+      setSearchError("No se pudo preparar la eliminación.");
+      setSearchDeleting(false);
+      return;
+    }
+
+    const reason = window.prompt("Motivo de eliminación (opcional):") ?? "";
+    const updated = await supabase
+      .from("packages")
+      .update({ current_status_id: eliminadoId })
+      .eq("id", pkg.id);
+
+    if (updated.error) {
+      setSearchError(updated.error.message);
+      setSearchDeleting(false);
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const deletedBy = sessionData.session?.user?.id ?? null;
+
+    await supabase.from("package_deletions").insert({
+      company_id: companyId,
+      package_id: pkg.id,
+      deleted_by: deletedBy,
+      reason: reason || null,
+      from_status_id: pkg.current_status_id ?? null,
+      to_status_id: eliminadoId,
+    });
+
+    setSearchResult((prev: any) => (prev ? { ...prev, status_name: "Eliminado" } : prev));
+    setSearchHistory((prev) => [
+      { label: `Eliminado: ${reason || "sin motivo"}`, at: new Date().toISOString() },
+      ...prev,
+    ]);
+    setSearchDeleting(false);
+  };
+
   if (loading) {
     return <div className="content">Cargando...</div>;
   }
@@ -318,6 +389,15 @@ export default function DashboardLayout({
               </>
             )}
             <div className="row-actions">
+              {role === "admin" && searchResult && (
+                <button
+                  className="button danger"
+                  onClick={deleteFromSearch}
+                  disabled={searchDeleting || searchResult.status_name === "Eliminado"}
+                >
+                  {searchDeleting ? "Eliminando..." : "Eliminar"}
+                </button>
+              )}
               <button className="button ghost" onClick={() => setSearchOpen(false)}>Cerrar</button>
             </div>
           </div>

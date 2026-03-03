@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type PackageRow = {
   id: string;
   public_code: string;
   created_at: string;
+  assigned_at: string | null;
   zone_name: string | null;
   courier_name: string | null;
   status_name: string | null;
@@ -48,6 +49,21 @@ export default function CourierPage() {
 
   const [detail, setDetail] = useState<PackageDetail | null>(null);
   const [showDetail, setShowDetail] = useState(false);
+  const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
+
+  const toBogotaDateKey = (isoDate: string | null | undefined) => {
+    if (!isoDate) return "sin-fecha";
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(isoDate));
+    const year = parts.find((p) => p.type === "year")?.value ?? "0000";
+    const month = parts.find((p) => p.type === "month")?.value ?? "01";
+    const day = parts.find((p) => p.type === "day")?.value ?? "01";
+    return `${year}-${month}-${day}`;
+  };
 
   const getStatusId = async (name: string) => {
     const { data } = await supabase
@@ -92,11 +108,17 @@ export default function CourierPage() {
 
     const assignments = await supabase
       .from("package_assignments")
-      .select("package_id")
+      .select("package_id, assigned_at")
       .eq("courier_id", cid)
       .is("unassigned_at", null);
 
-    const packageIds = (assignments.data ?? []).map((a) => a.package_id);
+    const activeAssignments = (assignments.data ?? []) as Array<{
+      package_id: string;
+      assigned_at: string | null;
+    }>;
+    const packageIds = activeAssignments.map((a) => a.package_id);
+    const assignedAtByPackage = new Map<string, string | null>();
+    activeAssignments.forEach((a) => assignedAtByPackage.set(a.package_id, a.assigned_at));
 
     if (packageIds.length > 0) {
       const pkg = await supabase
@@ -106,7 +128,12 @@ export default function CourierPage() {
         .order("created_at", { ascending: false });
       const unique = new Map<string, PackageRow>();
       (pkg.data ?? []).forEach((row) => {
-        if (!unique.has(row.id)) unique.set(row.id, row);
+        if (!unique.has(row.id)) {
+          unique.set(row.id, {
+            ...row,
+            assigned_at: assignedAtByPackage.get(row.id) ?? null,
+          });
+        }
       });
       const allRows = Array.from(unique.values());
       setPackages(allRows.filter((r) => r.status_name !== "Eliminado"));
@@ -132,7 +159,7 @@ export default function CourierPage() {
   const loadWeeklySummary = async (cid: string) => {
     const now = new Date();
     const day = now.getDay();
-    const diff = day === 0 ? -6 : 1 - day; // Monday
+    const diff = -day; // Sunday
     const start = new Date(now);
     start.setDate(now.getDate() + diff);
     start.setHours(0, 0, 0, 0);
@@ -258,6 +285,33 @@ export default function CourierPage() {
     void load();
   }, []);
 
+  const packagesByDay = useMemo(() => {
+    const grouped = new Map<string, PackageRow[]>();
+    for (const pkg of packages) {
+      const dateKey = toBogotaDateKey(pkg.assigned_at);
+      if (!grouped.has(dateKey)) grouped.set(dateKey, []);
+      grouped.get(dateKey)!.push(pkg);
+    }
+    return Array.from(grouped.entries())
+      .map(([day, rows]) => ({ day, rows }))
+      .sort((a, b) => (a.day < b.day ? 1 : -1));
+  }, [packages]);
+
+  const formatDayLabel = (day: string) => {
+    if (day === "sin-fecha") return "Sin fecha de asignación";
+    const dt = new Date(`${day}T00:00:00`);
+    return dt.toLocaleDateString("es-CO", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  };
+
+  const toggleDay = (day: string) => {
+    setExpandedDays((prev) => ({ ...prev, [day]: !prev[day] }));
+  };
+
   return (
     <div className="page">
       {loading && <div className="card">Cargando...</div>}
@@ -290,7 +344,7 @@ export default function CourierPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h3>Contabilidad semanal</h3>
             <p className="muted">
-              Semana actual (Lun–Dom): {weekStart ? new Date(weekStart).toLocaleDateString() : "-"}{" "}
+              Semana actual (Dom–Sab): {weekStart ? new Date(weekStart).toLocaleDateString() : "-"}{" "}
               - {weekEnd ? new Date(weekEnd).toLocaleDateString() : "-"}
             </p>
             <div className="grid grid-2" style={{ marginTop: 8 }}>
@@ -307,56 +361,106 @@ export default function CourierPage() {
 
           <div className="card" style={{ marginBottom: 16 }}>
             <h3>Mis paquetes</h3>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Código</th>
-                  <th>Municipio</th>
-                  <th>Estado</th>
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {packages.map((p) => (
-                  <tr key={p.id}>
-                    <td>
-                      <button className="btn ghost" onClick={() => openDetail(p.id)}>
-                        {p.public_code}
-                      </button>
-                    </td>
-                    <td>{p.zone_name ?? "Sin municipio"}</td>
-                    <td>{p.status_name ?? "Sin estado"}</td>
-                    <td style={{ display: "grid", gap: 6 }}>
-                      <button
-                        className="btn"
-                        onClick={() => markDelivered(p.id)}
-                        disabled={p.status_name === "Eliminado"}
-                      >
-                        Marcar entregado
-                      </button>
-                      <div style={{ display: "grid", gap: 6 }}>
-                        <input
-                          className="input"
-                          placeholder="Motivo devolución"
-                          value={returnReason[p.id] ?? ""}
-                          onChange={(e) =>
-                            setReturnReason((prev) => ({ ...prev, [p.id]: e.target.value }))
-                          }
-                          disabled={p.status_name === "Eliminado"}
-                        />
-                        <button
-                          className="btn"
-                          onClick={() => registerReturn(p.id)}
-                          disabled={p.status_name === "Eliminado"}
-                        >
-                          Registrar devolución
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {packagesByDay.length === 0 && <p className="muted">No tienes paquetes activos.</p>}
+            {packagesByDay.map(({ day, rows }) => {
+              const isOpen = expandedDays[day] ?? true;
+              return (
+                <div
+                  key={day}
+                  style={{
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 12,
+                    marginBottom: 12,
+                    overflow: "hidden",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => toggleDay(day)}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "12px 14px",
+                      borderRadius: 0,
+                    }}
+                  >
+                    <span style={{ textTransform: "capitalize", fontWeight: 700 }}>
+                      {formatDayLabel(day)}
+                    </span>
+                    <span className="muted">
+                      {rows.length} paquete{rows.length === 1 ? "" : "s"} · {isOpen ? "Ocultar" : "Ver"}
+                    </span>
+                  </button>
+
+                  {isOpen && (
+                    <div style={{ padding: "0 10px 10px" }}>
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Código</th>
+                            <th>Fecha asignación</th>
+                            <th>Municipio</th>
+                            <th>Estado</th>
+                            <th>Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((p) => (
+                            <tr key={p.id}>
+                              <td>
+                                <button className="btn ghost" onClick={() => openDetail(p.id)}>
+                                  {p.public_code}
+                                </button>
+                              </td>
+                              <td>
+                                {p.assigned_at
+                                  ? new Date(p.assigned_at).toLocaleString()
+                                  : "-"}
+                              </td>
+                              <td>{p.zone_name ?? "Sin municipio"}</td>
+                              <td>{p.status_name ?? "Sin estado"}</td>
+                              <td style={{ display: "grid", gap: 6 }}>
+                                <button
+                                  className="btn"
+                                  onClick={() => markDelivered(p.id)}
+                                  disabled={p.status_name === "Eliminado"}
+                                >
+                                  Marcar entregado
+                                </button>
+                                <div style={{ display: "grid", gap: 6 }}>
+                                  <input
+                                    className="input"
+                                    placeholder="Motivo devolución"
+                                    value={returnReason[p.id] ?? ""}
+                                    onChange={(e) =>
+                                      setReturnReason((prev) => ({
+                                        ...prev,
+                                        [p.id]: e.target.value,
+                                      }))
+                                    }
+                                    disabled={p.status_name === "Eliminado"}
+                                  />
+                                  <button
+                                    className="btn"
+                                    onClick={() => registerReturn(p.id)}
+                                    disabled={p.status_name === "Eliminado"}
+                                  >
+                                    Registrar devolución
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {deletedPackages.length > 0 && (
@@ -369,6 +473,7 @@ export default function CourierPage() {
                 <thead>
                   <tr>
                     <th>Código</th>
+                    <th>Fecha asignación</th>
                     <th>Municipio</th>
                     <th>Estado</th>
                   </tr>
@@ -377,6 +482,11 @@ export default function CourierPage() {
                   {deletedPackages.map((p) => (
                     <tr key={p.id}>
                       <td className="mono">{p.public_code}</td>
+                      <td>
+                        {p.assigned_at
+                          ? new Date(p.assigned_at).toLocaleString()
+                          : "-"}
+                      </td>
                       <td>{p.zone_name ?? "Sin municipio"}</td>
                       <td>{p.status_name ?? "Eliminado"}</td>
                     </tr>

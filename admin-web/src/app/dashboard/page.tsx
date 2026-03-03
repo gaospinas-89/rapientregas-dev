@@ -72,15 +72,14 @@ export default function DashboardPage() {
           returns: returnsCount.count ?? 0,
         });
 
-        const [pkgRes, courierRes, assignRes, statusRes] = await Promise.all([
+        const [pkgRes, assignRes, statusRes] = await Promise.all([
           supabase
-            .from("packages")
-            .select("id, public_code, created_at, current_status_id")
+            .from("package_list_view")
+            .select("id, public_code, created_at, courier_name, status_name")
             .eq("company_id", companyId)
-            .neq("current_status_id", deletedId ?? "")
+            .neq("status_name", "Eliminado")
             .order("created_at", { ascending: false })
             .limit(6),
-          supabase.from("couriers").select("id,full_name,identification").eq("company_id", companyId),
           supabase
             .from("package_assignments")
             .select("package_id,courier_id,unassigned_at")
@@ -94,22 +93,14 @@ export default function DashboardPage() {
 
         if (pkgRes.error) throw pkgRes.error;
 
-        const courierById = new Map(
-          (courierRes.data ?? []).map((c: any) => [
-            c.id,
-            `${c.full_name ?? "Sin nombre"} · ${c.identification ?? "-"}`,
-          ])
-        );
         const courierByPackage = new Map(
           (assignRes.data ?? []).map((a) => [a.package_id, a.courier_id])
         );
-        const statusById = new Map((statusRes.data ?? []).map((s) => [s.id, s.name]));
-
-        const latest = (pkgRes.data ?? []).map((p) => ({
+        const latest = (pkgRes.data ?? []).map((p: any) => ({
           id: p.id,
           public_code: p.public_code,
           created_at: p.created_at,
-          courier_name: courierById.get(courierByPackage.get(p.id) ?? "") ?? null,
+          courier_name: p.courier_name ?? null,
         }));
         setLatestPackages(latest);
 

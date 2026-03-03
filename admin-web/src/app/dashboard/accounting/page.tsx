@@ -332,9 +332,12 @@ function getWeekRangeFromValue(value: string) {
   const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   monday.setUTCDate(simple.getUTCDate() + diff);
 
-  const start = new Date(monday);
-  const end = new Date(monday);
-  end.setUTCDate(monday.getUTCDate() + 7);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() - 1);
+
+  const start = new Date(sunday);
+  const end = new Date(sunday);
+  end.setUTCDate(sunday.getUTCDate() + 7); // exclusive upper bound
   return { weekStart: start, weekEnd: end };
 }
 

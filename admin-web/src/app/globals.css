@@ -292,6 +292,7 @@ body { background: #f6f7fb; color: #0f172a; }
 .button { background: #111827; color: #fff; padding: 8px 12px; border-radius: 10px; border: none; font-size: 13px; cursor: pointer; }
 .button.ghost { background: #f3f4f6; color: #111827; }
 .button.secondary { background: #0f172a; color: #fff; }
+.button.danger { background: #ef4444; color: #fff; }
 
 .input, .select { padding: 8px 10px; border: 1px solid #e3e7ef; border-radius: 10px; font-size: 13px; }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
